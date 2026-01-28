@@ -1,3 +1,10 @@
+# Data source to create Lambda deployment package
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/functions/index.py"
+  output_path = "${path.module}/functions/chatbot_handler.zip"
+}
+
 # IAM Role for Lambda
 resource "aws_iam_role" "lambda_role" {
   name = "${var.project_name}-lambda-role-${var.environment}"
@@ -29,8 +36,7 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
-          "dynamodb:Query",
-          "dynamodb:Scan"
+          "dynamodb:Query"
         ]
         Resource = var.dynamodb_arns
       },
@@ -41,7 +47,10 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:*:*"
+        Resource = [
+          "arn:aws:logs:*:*:log-group:/aws/lambda/${var.project_name}-handler-${var.environment}",
+          "arn:aws:logs:*:*:log-group:/aws/lambda/${var.project_name}-handler-${var.environment}:*"
+        ]
       }
     ]
   })
@@ -49,20 +58,22 @@ resource "aws_iam_role_policy" "lambda_policy" {
 
 # Lambda Function for Chatbot
 resource "aws_lambda_function" "chatbot_handler" {
-  filename         = "${path.module}/functions/chatbot_handler.zip"
+  filename         = data.archive_file.lambda_zip.output_path
   function_name    = "${var.project_name}-handler-${var.environment}"
   role             = aws_iam_role.lambda_role.arn
-  handler          = "index.handler"
-  source_code_hash = filebase64sha256("${path.module}/functions/chatbot_handler.zip")
-  runtime          = "python3.11"
-  timeout          = 30
-  memory_size      = 256
+  handler          = var.handler
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  runtime          = var.runtime
+  timeout          = var.timeout
+  memory_size      = var.memory_size
 
   environment {
     variables = {
-      SESSIONS_TABLE  = var.sessions_table_name
-      CUSTOMERS_TABLE = var.customers_table_name
-      ENVIRONMENT     = var.environment
+      SESSIONS_TABLE   = var.sessions_table_name
+      CUSTOMERS_TABLE  = var.customers_table_name
+      ENVIRONMENT      = var.environment
+      SESSION_TTL_HOURS = tostring(var.session_ttl_hours)
+      ALLOWED_ORIGINS  = var.allowed_origins
     }
   }
 

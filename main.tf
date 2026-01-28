@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -24,8 +28,11 @@ provider "aws" {
 
 # DynamoDB tables for chatbot data
 module "dynamodb" {
-  source      = "./modules/dynamodb"
-  environment = var.environment
+  source       = "./modules/dynamodb"
+  environment  = var.environment
+  project_name = var.project_name
+
+  enable_point_in_time_recovery = var.enable_point_in_time_recovery
 }
 
 # Lambda functions for chatbot logic
@@ -40,6 +47,11 @@ module "lambda" {
     module.dynamodb.sessions_table_arn,
     module.dynamodb.customers_table_arn
   ]
+
+  timeout           = var.lambda_timeout
+  memory_size       = var.lambda_memory_size
+  session_ttl_hours = var.session_ttl_hours
+  allowed_origins   = var.allowed_origins
 }
 
 # API Gateway for web access
