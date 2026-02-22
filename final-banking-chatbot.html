@@ -213,15 +213,134 @@ Try asking about your balance, recent transactions, or click any quick action ab
 
     <script>
         const API_URL = 'https://4c1vpuut91.execute-api.us-east-1.amazonaws.com/dev/chat';
-        const sessionId = 'session-' + Date.now();
-        
+        let sessionId = 'session-' + Date.now() + Math.random().toString(36).substr(2, 9);
+
         const input = document.getElementById('chatInput');
         const messagesDiv = document.getElementById('chatMessages');
-        
+
+        // Conversation state for multi-step flows (used by offline fallback)
+        let pendingAction = null;
+        let transferAmount = 0;
+
+        const ACCOUNTS = {
+            checking: { balance: 5432.10, number: "****1234", type: "Premium Checking" },
+            savings:  { balance: 15750.25, number: "****5678", type: "High-Yield Savings" },
+            credit:   { balance: 2340.50, available: 7659.50, number: "****9012", type: "Rewards Card" }
+        };
+
+        const TRANSACTIONS = [
+            { date: "Today",     desc: "Starbucks Coffee",          amount: -5.85,   balance: 5432.10 },
+            { date: "Yesterday", desc: "Direct Deposit - Salary",   amount: 3500.00, balance: 5437.95 },
+            { date: "Jan 13",    desc: "Amazon Purchase",           amount: -67.42,  balance: 1937.95 },
+            { date: "Jan 12",    desc: "Transfer from Savings",     amount: 500.00,  balance: 2005.37 },
+            { date: "Jan 11",    desc: "Walmart Grocery",           amount: -142.38, balance: 1505.37 }
+        ];
+
+        const ATM_LOCATIONS = [
+            "\u{1F4CD} SecureBank ATM - 123 Main St (0.3 miles)",
+            "\u{1F4CD} Partner ATM - Walmart, 456 Oak Ave (0.8 miles)",
+            "\u{1F4CD} SecureBank Branch - 789 Pine Rd (1.2 miles)",
+            "\u{1F4CD} Partner ATM - 7-Eleven, 321 Elm St (1.5 miles)"
+        ];
+
+        function fmt(n) { return "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+        function getResponse(raw) {
+            const msg = raw.toLowerCase();
+
+            // Multi-step: waiting for transfer amount
+            if (pendingAction === 'transfer_amount') {
+                const match = raw.match(/\$?(\d+(?:\.\d{2})?)/);
+                if (match) {
+                    const amount = parseFloat(match[1]);
+                    if (amount > ACCOUNTS.checking.balance) {
+                        return `\u274C Insufficient funds. Your checking balance is ${fmt(ACCOUNTS.checking.balance)}. Please enter a smaller amount or type 'cancel'.`;
+                    }
+                    transferAmount = amount;
+                    pendingAction = 'transfer_confirm';
+                    return `\u{1F4B8} Ready to transfer ${fmt(amount)} from Checking ${ACCOUNTS.checking.number} to Savings ${ACCOUNTS.savings.number}.\n\n\u26A0\uFE0F Please type 'confirm' to proceed or 'cancel' to stop.`;
+                }
+                return "Please enter a valid amount (e.g., $100 or 100)";
+            }
+
+            // Multi-step: waiting for transfer confirmation
+            if (pendingAction === 'transfer_confirm') {
+                if (msg.includes('confirm')) {
+                    const newChecking = ACCOUNTS.checking.balance - transferAmount;
+                    const newSavings = ACCOUNTS.savings.balance + transferAmount;
+                    const conf = Math.floor(100000 + Math.random() * 900000);
+                    pendingAction = null;
+                    return `\u2705 Transfer Successful!\n\n\u{1F4E4} From: Checking ${ACCOUNTS.checking.number}\n\u{1F4E5} To: Savings ${ACCOUNTS.savings.number}\n\u{1F4B5} Amount: ${fmt(transferAmount)}\n\u{1F522} Confirmation: #${conf}\n\nNew Balances:\n- Checking: ${fmt(newChecking)}\n- Savings: ${fmt(newSavings)}`;
+                }
+                if (msg.includes('cancel')) { pendingAction = null; return "Transfer cancelled. How else can I help you?"; }
+                return "Please type 'confirm' to complete the transfer or 'cancel' to stop.";
+            }
+
+            // Balance
+            if (msg.includes('balance') || msg.includes('how much')) {
+                if (msg.includes('savings'))
+                    return `\u{1F4B0} Savings Account ${ACCOUNTS.savings.number}\nBalance: ${fmt(ACCOUNTS.savings.balance)}\n\nInterest earned this month: $47.25`;
+                if (msg.includes('credit'))
+                    return `\u{1F4B3} Credit Card ${ACCOUNTS.credit.number}\nCurrent Balance: ${fmt(ACCOUNTS.credit.balance)}\nAvailable Credit: ${fmt(ACCOUNTS.credit.available)}\nMinimum Payment Due: $35.00`;
+                return `\u{1F4B0} Your Account Balances:\n\n\u{1F3E6} Checking ${ACCOUNTS.checking.number}\n   Balance: ${fmt(ACCOUNTS.checking.balance)}\n   \n\u{1F48E} Savings ${ACCOUNTS.savings.number}\n   Balance: ${fmt(ACCOUNTS.savings.balance)}\n   \n\u{1F4B3} Credit Card ${ACCOUNTS.credit.number}\n   Balance: ${fmt(ACCOUNTS.credit.balance)}\n   Available: ${fmt(ACCOUNTS.credit.available)}`;
+            }
+
+            // Transactions
+            if (msg.includes('transaction') || msg.includes('recent') || msg.includes('history')) {
+                const lines = TRANSACTIONS.map(t => {
+                    const sign = t.amount > 0 ? "(+" : "";
+                    const end = t.amount > 0 ? ")" : "";
+                    return `\u2022 ${t.date}: ${t.desc} ${sign}${fmt(Math.abs(t.amount))}${end}`;
+                }).join("\n");
+                return `\u{1F4CA} Recent Transactions (Checking):\n\n${lines}\n\nCurrent Balance: ${fmt(ACCOUNTS.checking.balance)}`;
+            }
+
+            // Transfer
+            if (msg.includes('transfer')) {
+                pendingAction = 'transfer_amount';
+                return "\u{1F4B8} Let's set up your transfer.\n\nHow much would you like to transfer from Checking to Savings?\n\n(Enter amount like $100 or just 100)";
+            }
+
+            // ATM
+            if (msg.includes('atm') || msg.includes('branch')) {
+                return `\u{1F4CD} Nearest ATM Locations:\n\n${ATM_LOCATIONS.join("\n")}\n\n\u{1F4A1} Tip: SecureBank ATMs have no fees. Partner ATMs may charge $3.00`;
+            }
+
+            // Bills
+            if (msg.includes('pay') || msg.includes('bill')) {
+                return "\u{1F4B3} Upcoming Bills:\n\n- Electricity - $142.50 (Due Jan 20)\n- Internet - $79.99 (Due Jan 22)\n- Credit Card - $35.00 (Min. payment due Jan 25)\n- Netflix - $15.99 (Auto-pay Jan 28)\n\nWould you like to pay any of these bills now?";
+            }
+
+            // Help
+            if (msg.includes('help')) {
+                return "\u{1F91D} I can help you with:\n\n\u{1F4B0} Check balances - \"What's my balance?\"\n\u{1F4CA} View transactions - \"Show recent transactions\"\n\u{1F4B8} Transfer money - \"Transfer funds\"\n\u{1F4CD} Find ATMs - \"Where's the nearest ATM?\"\n\u{1F4B3} Pay bills - \"Show my bills\"\n\u{1F4DE} Support - \"Talk to support\"\n\u{1F510} Security - \"Is my account secure?\"\n\nJust type or click any quick action button above!";
+            }
+
+            // Greeting
+            if (msg.includes('hello') || msg.includes('hi')) {
+                const h = new Date().getHours();
+                const g = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+                return `${g}! \u{1F44B} Welcome to SecureBank. How can I assist you today?`;
+            }
+
+            // Thanks
+            if (msg.includes('thank')) {
+                return "You're welcome! \u{1F60A} Is there anything else I can help you with today?";
+            }
+
+            // Security
+            if (msg.includes('secure') || msg.includes('safe') || msg.includes('security')) {
+                return "\u{1F510} Your Security Status:\n\n\u2705 256-bit encryption active\n\u2705 Two-factor authentication enabled\n\u2705 Last login: Today at 2:15 PM from this device\n\u2705 No suspicious activity detected\n\nYour account is fully protected. If you notice anything unusual, type 'report fraud' immediately.";
+            }
+
+            // Default
+            return `I'd be happy to help! You said: '${raw}'\n\nTry asking about:\n\u2022 Account balance\n\u2022 Recent transactions\n\u2022 Transfer money\n\u2022 Find ATM\n\nOr click the quick action buttons above!`;
+        }
+
         input.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') sendMsg();
         });
-        
+
         function addMsg(text, isUser) {
             const msg = document.createElement('div');
             msg.className = 'message ' + (isUser ? 'user-message' : 'bot-message');
@@ -229,37 +348,42 @@ Try asking about your balance, recent transactions, or click any quick action ab
             messagesDiv.appendChild(msg);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
-        
+
         async function sendMsg() {
             const message = input.value.trim();
             if (!message) return;
-            
+
             addMsg(message, true);
             input.value = '';
             input.focus();
-            
+
+            // Try API first, fall back to local demo responses
             try {
                 const response = await fetch(API_URL, {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: message, sessionId: sessionId})
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message, sessionId: sessionId })
                 });
-                
+
+                if (!response.ok) throw new Error('API returned ' + response.status);
+
                 const data = await response.json();
-                addMsg(data.response, false);
+                addMsg(data.response || getResponse(message), false);
             } catch (error) {
-                addMsg('Error: Unable to connect. Please try again.', false);
-                console.error(error);
+                // API unavailable - use offline demo responses
+                setTimeout(() => addMsg(getResponse(message), false), 300);
             }
         }
-        
+
         function quickSend(text) {
             input.value = text;
             sendMsg();
         }
-        
-        // Focus input on load
+
         window.onload = () => input.focus();
     </script>
 </body>
 </html>
+
+
+
